@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 import { cookies } from "next/headers";
 import { STARTING_CHIPS, type Security } from "./constants";
 import { getDb, getSecurities } from "./db";
-import { currentPrices, getMarketState, quotePurchase } from "./lmsr";
+import { currentPrices, evaluateTrade, getMarketState } from "./lmsr";
 import type { PositionRecord, SessionData, UserRecord } from "./types";
 
 const SESSION_COOKIE = "session_token";
@@ -12,6 +12,21 @@ async function getCookieStore() {
   } catch {
     // When invoked outside of request context
     return null;
+  }
+}
+
+function ensurePositionsForUser(userId: string) {
+  const db = getDb();
+  const existing = db
+    .prepare(`SELECT security FROM positions WHERE user_id = ?`)
+    .all(userId) as { security: Security }[];
+  const existingSet = new Set(existing.map((row) => row.security));
+  for (const security of getSecurities()) {
+    if (!existingSet.has(security)) {
+      db.prepare(
+        `INSERT INTO positions (id, user_id, security, shares) VALUES (?, ?, ?, 0)`
+      ).run(randomUUID(), userId, security);
+    }
   }
 }
 
@@ -34,6 +49,7 @@ export function createOrGetUser(name: string) {
     .prepare(`SELECT id, name, chips FROM users WHERE name = ?`)
     .get(trimmed) as UserRecord | undefined;
   if (existing) {
+    ensurePositionsForUser(existing.id);
     return existing;
   }
   const id = randomUUID();
@@ -42,11 +58,7 @@ export function createOrGetUser(name: string) {
     trimmed,
     STARTING_CHIPS
   );
-  for (const security of getSecurities()) {
-    db.prepare(
-      `INSERT INTO positions (id, user_id, security, shares) VALUES (?, ?, ?, 0)`
-    ).run(randomUUID(), id, security);
-  }
+  ensurePositionsForUser(id);
 
   return {
     id,
@@ -96,6 +108,7 @@ export function loadSession(
   if (!row) {
     return null;
   }
+  ensurePositionsForUser(row.id);
 
   const positions = db
     .prepare(
@@ -121,10 +134,12 @@ export function placeBet({
   token,
   security,
   amount,
+  side,
 }: {
   token: string;
   security: Security;
   amount: number;
+  side: "buy" | "sell";
 }): SessionData {
   const db = getDb();
   const session = loadSession(token);
@@ -138,10 +153,20 @@ export function placeBet({
     throw new Error("Amount must be positive");
   }
 
-  const totals = getMarketState();
-  const { cost } = quotePurchase(totals, security, amount);
+  const tradeAmount = side === "sell" ? -amount : amount;
 
-  if (session.user.chips < cost) {
+  const totals = getMarketState();
+  const { cost } = evaluateTrade(totals, security, tradeAmount);
+
+  const position = session.positions.find((pos) => pos.security === security);
+  const currentShares = position?.shares ?? 0;
+
+  if (side === "sell" && currentShares < amount - 1e-9) {
+    throw new Error("Not enough shares to sell");
+  }
+
+  const resultingChips = session.user.chips - cost;
+  if (side === "buy" && resultingChips < -1e-9) {
     throw new Error("Not enough chips");
   }
 
@@ -156,9 +181,9 @@ export function placeBet({
   );
 
   const transaction = db.transaction(() => {
-    updateMarket.run(amount, security);
+    updateMarket.run(tradeAmount, security);
     updateUser.run(cost, session.user.id);
-    updatePosition.run(amount, session.user.id, security);
+    updatePosition.run(tradeAmount, session.user.id, security);
   });
 
   transaction();

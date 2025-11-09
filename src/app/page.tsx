@@ -1,8 +1,10 @@
 "use client";
 
+import Image from "next/image";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { SECURITIES } from "@/lib/constants";
+import { FIRMS } from "@/lib/constants";
 import type { SessionData } from "@/lib/types";
+import { quoteTrade } from "@/lib/lmsrMath";
 
 type FetchState = "idle" | "loading";
 
@@ -17,6 +19,7 @@ export default function Home() {
   const [name, setName] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [betInputs, setBetInputs] = useState<Record<string, string>>({});
+  const [betSides, setBetSides] = useState<Record<string, "buy" | "sell">>({});
 
   const isLoading = status === "loading";
 
@@ -83,9 +86,10 @@ export default function Home() {
     const raw = betInputs[security] ?? "0";
     const amount = Number.parseFloat(raw);
     if (!Number.isFinite(amount) || amount <= 0) {
-      setMessage("Enter a positive amount to bet.");
+      setMessage("Enter a positive number of shares.");
       return;
     }
+    const side = betSides[security] ?? "buy";
     setStatus("loading");
     setMessage(null);
     try {
@@ -94,7 +98,7 @@ export default function Home() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ security, amount }),
+        body: JSON.stringify({ security, amount, side }),
       });
       const payload = await response.json();
       if (!response.ok) {
@@ -103,30 +107,76 @@ export default function Home() {
       }
       setSession(payload as SessionData);
       setBetInputs((prev) => ({ ...prev, [security]: "" }));
-      setMessage(`Placed bet of ${amount} on ${security}.`);
+      setMessage(`Placed ${side} order of ${amount} share(s) for ${security}.`);
     } catch (error) {
       console.error(error);
-      setMessage("Unexpected error placing bet.");
+      setMessage("Unexpected error placing order.");
+    } finally {
+      setStatus("idle");
+    }
+  };
+
+  const handleLogout = async () => {
+    setStatus("loading");
+    setMessage(null);
+    try {
+      await fetch("/api/logout", {
+        method: "POST",
+      });
+      setSession(null);
+      setBetInputs({});
+      setBetSides({});
+      setMessage("You have been logged out.");
+    } catch (error) {
+      console.error(error);
+      setMessage("Unexpected error logging out.");
     } finally {
       setStatus("idle");
     }
   };
 
   const marketRows = useMemo(() => {
-    if (!session) return [] as Array<{
-      security: string;
-      position: number;
-      price: number;
-      totalShares: number;
-    }>;
-    return SECURITIES.map((security) => {
+    if (!session)
+      return [] as Array<{
+        name: string;
+        logo: string;
+        position: number;
+        price: number;
+        totalShares: number;
+      }>;
+    return FIRMS.map((firm) => {
       const position =
-        session.positions.find((pos) => pos.security === security)?.shares ?? 0;
-      const price = session.prices[security] ?? 0;
-      const totalShares = session.totals[security] ?? 0;
-      return { security, position, price, totalShares };
+        session.positions.find((pos) => pos.security === firm.name)?.shares ?? 0;
+      const price = session.prices[firm.name] ?? 0;
+      const totalShares = session.totals[firm.name] ?? 0;
+      return { name: firm.name, logo: firm.logo, position, price, totalShares };
     });
   }, [session]);
+
+  const quotes = useMemo(() => {
+    if (!session) return {} as Record<string, number | null>;
+    const result: Record<string, number | null> = {};
+    for (const firm of FIRMS) {
+      const raw = betInputs[firm.name];
+      const amount = Number.parseFloat(raw ?? "");
+      if (!Number.isFinite(amount) || amount <= 0) {
+        result[firm.name] = null;
+        continue;
+      }
+      const side = betSides[firm.name] ?? "buy";
+      try {
+        const { cost } = quoteTrade({
+          totals: session.totals,
+          security: firm.name,
+          amount: side === "sell" ? -amount : amount,
+        });
+        result[firm.name] = cost;
+      } catch {
+        result[firm.name] = null;
+      }
+    }
+    return result;
+  }, [betInputs, betSides, session]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
@@ -143,6 +193,13 @@ export default function Home() {
                   {formatter.format(session.user.chips)} chips
                 </span>
               </div>
+              <button
+                className="rounded-lg border border-white/10 px-3 py-2 text-xs uppercase tracking-wide text-slate-200 transition hover:border-emerald-300 hover:text-emerald-200 disabled:cursor-wait"
+                onClick={() => void handleLogout()}
+                disabled={isLoading}
+              >
+                Logout
+              </button>
             </div>
           ) : (
             <span className="text-sm text-slate-300">
@@ -156,8 +213,8 @@ export default function Home() {
           <section className="rounded-2xl border border-white/10 bg-black/40 p-8 shadow-xl">
             <h2 className="text-xl font-semibold">Enter the market</h2>
             <p className="mt-2 text-sm text-slate-300">
-              Sign in with your name to receive 100 chips and start trading who
-              you think landed David&apos;s internship.
+              Sign in with your name to receive 100 chips and start trading
+              shares on where you think David&apos;s internship landed.
             </p>
             <form className="mt-6 flex flex-col gap-4" onSubmit={handleLogin}>
               <label className="text-sm font-medium text-slate-200">
@@ -185,8 +242,9 @@ export default function Home() {
               <div>
                 <h2 className="text-xl font-semibold">Markets</h2>
                 <p className="text-sm text-slate-300">
-                  Prices follow the Logarithmic Market Scoring Rule (LMSR). If
-                  David joins a firm, each share pays out 1 chip.
+                  Each firm trades as a 1-chip share if David ultimately joins
+                  them. Enter the number of shares you want to buy or sell and
+                  review the quoted chip cost before placing your order.
                 </p>
               </div>
               <button
@@ -198,64 +256,109 @@ export default function Home() {
               </button>
             </header>
             <div className="mt-6 grid gap-4">
-              <div className="grid grid-cols-1 gap-2 text-xs uppercase tracking-wide text-slate-400 sm:grid-cols-[2fr,1fr,1fr,1fr,1.2fr]">
-                <span>Firm</span>
-                <span>Price</span>
-                <span>Your Shares</span>
-                <span>Total Shares</span>
-                <span>Amount to Buy</span>
-              </div>
               <div className="space-y-3">
-                {marketRows.map(({ security, position, price, totalShares }) => (
-                  <div
-                    key={security}
-                    className="grid grid-cols-1 items-center gap-4 rounded-xl border border-white/5 bg-white/5 p-4 text-sm sm:grid-cols-[2fr,1fr,1fr,1fr,1.2fr]"
-                  >
-                    <div>
-                      <p className="font-medium text-white">{security}</p>
-                      <p className="text-xs text-slate-300">
-                        LMSR price for a 1 chip payout.
-                      </p>
+                {marketRows.map(({ name: security, logo, position, price, totalShares }) => {
+                  const side = betSides[security] ?? "buy";
+                  const raw = betInputs[security] ?? "";
+                  const amount = Number.parseFloat(raw);
+                  const quote = quotes[security];
+                  const insufficientShares =
+                    side === "sell" && Number.isFinite(amount) && amount > position;
+                  return (
+                    <div
+                      key={security}
+                      className="flex flex-col gap-4 rounded-xl border border-white/5 bg-white/5 p-5 text-sm sm:flex-row sm:items-center"
+                    >
+                      <div className="flex flex-1 items-center gap-4">
+                        <Image
+                          src={logo}
+                          alt={`${security} logo`}
+                          width={56}
+                          height={56}
+                          className="h-14 w-14 flex-shrink-0 rounded-xl border border-white/10 object-cover"
+                        />
+                        <div className="space-y-1">
+                          <p className="text-lg font-semibold text-white">{security}</p>
+                          <p className="text-xs uppercase tracking-wide text-slate-400">
+                            Price (chips per share): <span className="font-mono text-emerald-300">{formatter.format(price)}</span>
+                          </p>
+                          <div className="flex flex-wrap gap-4 text-xs text-slate-300">
+                            <span>
+                              Your Shares: <span className="font-mono text-slate-100">{formatter.format(position)}</span>
+                            </span>
+                            <span>
+                              Total Shares: <span className="font-mono text-slate-200">{formatter.format(totalShares)}</span>
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-3 sm:w-64">
+                        <div className="flex items-center gap-2 text-xs uppercase text-slate-300">
+                          <label className="flex items-center gap-1">
+                            <input
+                              type="radio"
+                              name={`${security}-side`}
+                              checked={side === "buy"}
+                              onChange={() =>
+                                setBetSides((prev) => ({ ...prev, [security]: "buy" }))
+                              }
+                            />
+                            Buy
+                          </label>
+                          <label className="flex items-center gap-1">
+                            <input
+                              type="radio"
+                              name={`${security}-side`}
+                              checked={side === "sell"}
+                              onChange={() =>
+                                setBetSides((prev) => ({ ...prev, [security]: "sell" }))
+                              }
+                            />
+                            Sell
+                          </label>
+                        </div>
+                        <input
+                          className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white placeholder-slate-500 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/40"
+                          inputMode="decimal"
+                          placeholder="0 shares"
+                          value={raw}
+                          onChange={(event) =>
+                            setBetInputs((prev) => ({
+                              ...prev,
+                              [security]: event.target.value,
+                            }))
+                          }
+                          disabled={isLoading}
+                        />
+                        <div className="text-xs text-slate-300">
+                          {quote !== null && Number.isFinite(quote) && raw !== "" ? (
+                            <span>
+                              Quote: <span className="font-mono text-emerald-200">{formatter.format(Math.abs(quote))}</span>
+                              {" "}chips {quote >= 0 ? (side === "buy" ? "required" : "refunded") : side === "sell" ? "received" : "credited"}
+                            </span>
+                          ) : (
+                            <span>Enter shares to see the current price quote.</span>
+                          )}
+                          {insufficientShares ? (
+                            <span className="block text-amber-300">Not enough shares to sell that amount.</span>
+                          ) : null}
+                        </div>
+                        <button
+                          className="rounded-lg bg-emerald-500 px-3 py-2 text-sm font-medium text-black transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+                          onClick={() => void handleBet(security)}
+                          disabled={isLoading || insufficientShares}
+                        >
+                          {isLoading ? "..." : side === "buy" ? "Buy" : "Sell"}
+                        </button>
+                      </div>
                     </div>
-                    <div className="font-mono text-base text-emerald-300">
-                      {formatter.format(price)}
-                    </div>
-                    <div className="font-mono text-slate-100">
-                      {formatter.format(position)}
-                    </div>
-                    <div className="font-mono text-slate-300">
-                      {formatter.format(totalShares)}
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <input
-                        className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white placeholder-slate-500 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/40"
-                        inputMode="decimal"
-                        placeholder="0.0"
-                        value={betInputs[security] ?? ""}
-                        onChange={(event) =>
-                          setBetInputs((prev) => ({
-                            ...prev,
-                            [security]: event.target.value,
-                          }))
-                        }
-                        disabled={isLoading}
-                      />
-                      <button
-                        className="rounded-lg bg-emerald-500 px-3 py-2 text-sm font-medium text-black transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
-                        onClick={() => void handleBet(security)}
-                        disabled={isLoading}
-                      >
-                        {isLoading ? "..." : "Buy"}
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
             <footer className="mt-6 text-xs text-slate-400">
-              Chips spent are deducted instantly based on the LMSR cost
-              function. Markets remain open until David announces his final
-              destination.
+              Prices update automatically as traders buy or sell shares. Chips
+              move immediately whenever an order is filled.
             </footer>
           </section>
         )}

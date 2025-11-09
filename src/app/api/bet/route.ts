@@ -16,6 +16,7 @@ const schema = z.object({
       message: "Invalid security",
     }),
   amount: z.number().positive("Amount must be positive"),
+  side: z.enum(["buy", "sell"]).default("buy"),
 });
 
 export async function POST(request: Request) {
@@ -30,9 +31,9 @@ export async function POST(request: Request) {
     }
 
     const payload = await request.json();
-    const { security, amount } = schema.parse(payload);
+    const { security, amount, side } = schema.parse(payload);
 
-    const updated = placeBet({ token, security, amount });
+    const updated = placeBet({ token, security, amount, side });
     return NextResponse.json(updated);
   } catch (error) {
     if (error instanceof z.ZodError) {
