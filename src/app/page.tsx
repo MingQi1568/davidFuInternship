@@ -183,7 +183,7 @@ export default function Home() {
       <header className="border-b border-white/10 bg-black/30 backdrop-blur">
         <div className="mx-auto flex max-w-4xl items-center justify-between px-6 py-6">
           <h1 className="text-2xl font-semibold tracking-tight">
-            David Fu Internship Markets
+            David Fu Internship Market
           </h1>
           {session ? (
             <div className="flex items-center gap-6 text-sm text-slate-200">
@@ -242,9 +242,8 @@ export default function Home() {
               <div>
                 <h2 className="text-xl font-semibold">Markets</h2>
                 <p className="text-sm text-slate-300">
-                  Each firm trades as a 1-chip share if David ultimately joins
-                  them. Enter the number of shares you want to buy or sell and
-                  review the quoted chip cost before placing your order.
+                  Each share in a firm will payout 1 chip if David eventually joins them, and 0 otherwise. Enter the number of shares you want to buy or sell and
+                  review the quoted chip cost before placing your order. You can think of price as probability.
                 </p>
               </div>
               <button

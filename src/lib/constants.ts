@@ -15,9 +15,9 @@ export const FIRMS = [
   { name: "Voleon", slug: "voleon", logo: "/logos/voleon.jpeg" },
 ] as const;
 
-export const SECURITIES = FIRMS.map(({ name }) => name);
+export type Security = (typeof FIRMS)[number]["name"];
 
-export type Security = (typeof SECURITIES)[number];
+export const SECURITIES = FIRMS.map(({ name }) => name) as readonly Security[];
 
 export const STARTING_CHIPS = 100;
 

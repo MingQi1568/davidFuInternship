@@ -31,7 +31,11 @@ export async function POST(request: Request) {
     }
 
     const payload = await request.json();
-    const { security, amount, side } = schema.parse(payload);
+    const { security, amount, side } = schema.parse(payload) as {
+      security: Security;
+      amount: number;
+      side: "buy" | "sell";
+    };
 
     const updated = placeBet({ token, security, amount, side });
     return NextResponse.json(updated);
